@@ -7,72 +7,10 @@ When a mutating webhook also patches annotations, the final object the API serve
 
 # What was the fix?
 
-updateAnnotation function in webhook.go file was commented out:
-
-/*
-func updateAnnotation(target map[string]string, added map[string]string) (patch []patchOperation) {
-        for key, value := range added {
-                if target == nil || target[key] == "" {
-                        target = map[string]string{}
-                        patch = append(patch, patchOperation {
-                                Op:   "add",
-                                Path: "/metadata/annotations",
-                                Value: map[string]string{
-                                        key: value,
-                                },
-                        })
-                } else {
-                        patch = append(patch, patchOperation {
-                                Op:    "replace",
-                                Path:  "/metadata/annotations/" + key,
-                                Value: value,
-                        })
-                }
-        }
-        return patch
-}
-
-*/
-
-It was replaced by this function which enables webhook to add annotation without clobbing existing annotations:
-
-func updateAnnotation(existing map[string]string, added map[string]string) (patch []patchOperation) {
-    // If annotations are nil on the object, create the map **once**.
-    if existing == nil {
-        patch = append(patch, patchOperation{
-            Op:    "add",
-            Path:  "/metadata/annotations",
-            Value: map[string]string{},
-        })
-        existing = map[string]string{} // local shadow so logic below treats as present
-    }
-
-    for k, v := range added {
-        esc := escapeJSONPointerSegment(k)
-        //if cur, ok := existing[k]; !ok {
-        if cur, ok := existing[k]; !ok || cur == "" {
-            // Key absent -> add that single key
-            patch = append(patch, patchOperation{
-                Op:    "add",
-                Path:  "/metadata/annotations/" + esc,
-                Value: v,
-            })
-        } else if cur != v {
-            // Key present but different -> replace just that key
-            patch = append(patch, patchOperation{
-                Op:    "replace",
-                Path:  "/metadata/annotations/" + esc,
-                Value: v,
-            })
-        }
-        // If cur == v, no-op: avoid noisy patches.
-    }
-
-    return patch
-}
+We optimized updateAnnotation() function in webhook.go file by making it add its own keys to the existing pod annotation instead of replacing entire metadata.annotation.
 
 
-## Deploy
+## Deploy Process
 
 1. Create a signed cert/key pair and store it in a Kubernetes `secret` that will be consumed by dnsconfig deployment
 
