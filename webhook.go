@@ -59,6 +59,14 @@ func init() {
 	_ = v1.AddToScheme(runtimeScheme)
 }
 
+// Added this function to fix Clobbing problem
+func escapeJSONPointerSegment(s string) string {
+    // RFC6901: "~" -> "~0", "/" -> "~1"
+    s = strings.ReplaceAll(s, "~", "~0")
+    s = strings.ReplaceAll(s, "/", "~1")
+    return s
+}
+
 func loadConfig(configFile string) (*corev1.PodDNSConfig, error) {
 	var cfg corev1.PodDNSConfig
 	 data, err := ioutil.ReadFile(configFile)
@@ -104,7 +112,7 @@ func mutationRequired(ignoredList []string, metadata *metav1.ObjectMeta) bool {
 	return required
 }
 
-
+/*
 func updateAnnotation(target map[string]string, added map[string]string) (patch []patchOperation) {
 	for key, value := range added {
 		if target == nil || target[key] == "" {
@@ -125,6 +133,45 @@ func updateAnnotation(target map[string]string, added map[string]string) (patch 
 		}
 	}
 	return patch
+}
+
+*/
+
+// updateAnnotation returns JSONPatch ops that ensure `added` keys exist (or are updated)
+// without wiping other annotations.
+func updateAnnotation(existing map[string]string, added map[string]string) (patch []patchOperation) {
+    // If annotations are nil on the object, create the map **once**.
+    if existing == nil {
+        patch = append(patch, patchOperation{
+            Op:    "add",
+            Path:  "/metadata/annotations",
+            Value: map[string]string{},
+        })
+        existing = map[string]string{} // local shadow so logic below treats as present
+    }
+
+    for k, v := range added {
+        esc := escapeJSONPointerSegment(k)
+        //if cur, ok := existing[k]; !ok {
+        if cur, ok := existing[k]; !ok || cur == "" {
+            // Key absent -> add that single key
+            patch = append(patch, patchOperation{
+                Op:    "add",
+                Path:  "/metadata/annotations/" + esc,
+                Value: v,
+            })
+        } else if cur != v {
+            // Key present but different -> replace just that key
+            patch = append(patch, patchOperation{
+                Op:    "replace",
+                Path:  "/metadata/annotations/" + esc,
+                Value: v,
+            })
+        }
+        // If cur == v, no-op: avoid noisy patches.
+    }
+
+    return patch
 }
 
 func addDNSConfig(p corev1.PodSpec,config corev1.PodDNSConfig , basePath string) (patch []patchOperation) {
